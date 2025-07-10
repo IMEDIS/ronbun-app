@@ -3,7 +3,7 @@ import requests
 import datetime
 import os
 import google.generativeai as genai
-import google.auth  # ★★★【これこそが、最後の忘れ物でした！】★★★
+import google.auth  # ★【最後の忘れ物】Googleのメインの道具箱をインポート
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -18,11 +18,15 @@ except KeyError:
 
 # --- Google認証情報の準備 (Workload Identity連携) ---
 def get_google_credentials():
+    """
+    Workload Identity連携で自動的に設定された認証情報を読み込み、
+    正しい操作範囲(scope)を付与して返す、完璧な認証関数。
+    """
     try:
         scopes = ['https://www.googleapis.com/auth/drive']
-        # この関数が、環境変数などを探し、自動で認証してくれる
-        creds, project_id = google.auth.default(scopes=scopes)
-        return creds
+        # この関数が、GitHub Actionsによって設定された環境変数を探し、自動で認証してくれる
+        credentials, project_id = google.auth.default(scopes=scopes)
+        return credentials
     except Exception as e:
         st.error(f"Google Cloudの認証に失敗しました。管理者にお問い合わせください。エラー: {e}")
         return None
