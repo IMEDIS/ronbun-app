@@ -3,6 +3,7 @@ import requests
 import datetime
 import os
 import google.generativeai as genai
+import google.auth  # ★★★【これこそが、最後の忘れ物でした！】★★★
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -17,12 +18,10 @@ except KeyError:
 
 # --- Google認証情報の準備 (Workload Identity連携) ---
 def get_google_credentials():
-    # Streamlit Cloud上でGitHub Actions経由で実行される場合、
-    # google-github-actions/auth@v2 が設定する環境変数から自動で認証情報が読み込まれる。
-    # この関数は、その認証情報にGoogle Drive APIの操作範囲(scope)を付与する役割を持つ。
     try:
-        # このライブラリは、標準的な環境変数を探して自動で認証を試みる
-        creds, project_id = google.auth.default(scopes=['https://www.googleapis.com/auth/drive'])
+        scopes = ['https://www.googleapis.com/auth/drive']
+        # この関数が、環境変数などを探し、自動で認証してくれる
+        creds, project_id = google.auth.default(scopes=scopes)
         return creds
     except Exception as e:
         st.error(f"Google Cloudの認証に失敗しました。管理者にお問い合わせください。エラー: {e}")
@@ -96,17 +95,12 @@ def search_pubmed(english_term, days=30):
 
 def create_google_doc(title, content, creds, folder_id):
     try:
-        # Google Docs APIとDrive APIの両方を使う
         drive_service = build('drive', 'v3', credentials=creds)
         docs_service = build('docs', 'v1', credentials=creds)
-        
-        # まずDriveに空のドキュメントを作成
         file_metadata = {'name': title, 'mimeType': 'application/vnd.google-apps.document', 'parents': [folder_id]}
         document = drive_service.files().create(body=file_metadata).execute()
         doc_id = document.get('id')
         doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
-        
-        # 次にDocs APIで内容を書き込む
         requests_body = [{'insertText': {'location': {'index': 1}, 'text': content}}]
         docs_service.documents().batchUpdate(documentId=doc_id, body={'requests': requests_body}).execute()
         return doc_url
@@ -117,7 +111,6 @@ st.set_page_config(page_title="最新医学論文おまかせサマリー", layo
 st.title("👨‍⚕️ 最新医学論文おまかせサマリー")
 st.markdown("知りたい病名やキーワードを日本語で入力すると、AIが海外の最新論文を検索・分析し、要点解説レポートを自動でGoogleドキュメントに作成します。")
 
-# ★レポートを保存するGoogle DriveフォルダのIDを入力させる
 DRIVE_FOLDER_ID = st.text_input("レポートを保存するGoogle DriveフォルダのIDを入力してください", help="Googleドライブで、このアプリ専用に作成・共有設定したフォルダを開き、URLの最後の部分にある英数字の羅列を貼り付けてください。")
 
 with st.form("search_form"):
