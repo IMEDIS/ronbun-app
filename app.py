@@ -12,7 +12,7 @@ import json
 # --- Streamlitのシークレット機能から情報を読み込む ---
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    # ★【修正済】正しい名前の引き出しから、正しい鍵を取り出す
+    DRIVE_FOLDER_ID = st.secrets["DRIVE_FOLDER_ID"]
     CREDS_JSON_STR = st.secrets["gcp_oauth_credentials"]["credentials"]
     TOKEN_JSON_STR = st.secrets["gcp_oauth_credentials"]["token"]
 except Exception as e:
@@ -40,15 +40,14 @@ def get_google_credentials():
             if creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                # このエラーは、リフレッシュトークン自体が古い場合に発生する可能性がある
-                st.error("Google認証情報の有効期限が切れており、更新もできませんでした。管理者による再認証が必要です。")
+                st.error("Google認証情報の有効期限が切れているか、無効です。")
                 return None
         return creds
     except Exception as e:
         st.error(f"Google認証情報の読み込みに失敗しました。Secretsの内容が正しいか確認してください。エラー: {e}")
         return None
 
-# --- ここから下の関数群は、一切の変更なし (省略) ---
+# --- ここから下の関数群は、一切の変更なし ---
 def to_wareki_jp(y, m):
     try: y, m = int(y), int(m)
     except (ValueError, TypeError): return f"{y}年{m}月"
@@ -135,8 +134,6 @@ st.subheader("世界中の最新論文から、知りたい情報を、3分で�
 st.write("キーワードを日本語で入力するだけで、AIが海外の最新論文を自動で検索・分析し、要点をまとめたサマリーレポートを、あなたのGoogleドライブに作成します。")
 st.write("") 
 
-DRIVE_FOLDER_ID = st.text_input("レポートを保存するGoogle DriveフォルダのIDを入力してください", help="Googleドライブで、このアプリ専用に作成・共有設定したフォルダを開き、URLの最後の部分にある英数字の羅列を貼り付けてください。")
-
 with st.form("search_form"):
     st.markdown("##### 検索したいキーワードを入力してください")
     col1, col2 = st.columns([3, 1])
@@ -145,7 +142,7 @@ with st.form("search_form"):
     with col2:
         submitted = st.form_submit_button("レポート作成を開始", use_container_width=True)
 
-if submitted and jp_disease_input and DRIVE_FOLDER_ID:
+if submitted and jp_disease_input:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
