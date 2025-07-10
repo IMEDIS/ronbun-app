@@ -5,7 +5,7 @@ import os.path
 import google.generativeai as genai
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import json
@@ -14,17 +14,15 @@ import json
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     GOOGLE_CREDS_JSON_STR = st.secrets["gcp_service_account"]["credentials"]
-    GOOGLE_TOKEN_JSON_STR = st.secrets["gcp_service_account"]["token"]
     # 文字列から認証情報オブジェクトを作成
     GOOGLE_CREDS_INFO = json.loads(GOOGLE_CREDS_JSON_STR)
-    GOOGLE_TOKEN_INFO = json.loads(GOOGLE_TOKEN_JSON_STR)
     SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/documents']
-except (KeyError, FileNotFoundError):
-    st.error("必要な認証情報が設定されていません。StreamlitのSecretsを確認してください。")
+except (KeyError, FileNotFoundError, json.JSONDecodeError) as e:
+    st.error(f"必要な認証情報が正しく設定されていません。StreamlitのSecretsを確認してください。エラー: {e}")
     st.stop()
 
 
-# --- ここから下の関数群は、ほぼ流用（引数や返り値の調整のみ） ---
+# --- ここから下の関数群（変更なし） ---
 def to_wareki_jp(y, m):
     try: y, m = int(y), int(m)
     except (ValueError, TypeError): return f"{y}年{m}月"
@@ -47,7 +45,6 @@ def analyze_and_explain_paper(paper_info, model):
 あなたは、最新の医学論文の要点を、日本の多忙な医師向けに分かりやすく解説する、非常に優秀なサイエンス・コミュニケーターです。
 以下の論文情報（タイトル、著者、発表日、要旨）を元に、下記の【出力フォーマット】に厳密に従って、日本語で解説文を生成してください。
 絶対に、元の英語のタイトルや要旨は出力に含めないでください。
-
 ---
 [論文情報]
 - タイトル: {paper_info['title']}
@@ -55,7 +52,6 @@ def analyze_and_explain_paper(paper_info, model):
 - 発表日: {paper_info['pub_date_jp']}
 - 要旨: {paper_info['abstract']}
 ---
-
 【出力フォーマット】
 ■ タイトル: （ここに日本語に翻訳したタイトル）
 ■ 発表日: {paper_info['pub_date_jp']}
@@ -70,12 +66,9 @@ def search_pubmed(english_term, days=30):
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"    
     end_date = datetime.date.today(); start_date = end_date - datetime.timedelta(days=days)
     date_query = f"{start_date.strftime('%Y/%m/%d')}[PDAT] : {end_date.strftime('%Y/%m/%d')}[PDAT]"
-    search_url = f"{base_url}esearch.fcgi"
-    search_params = {"db": "pubmed", "term": f"({english_term}[MeSH Terms] OR {english_term}[Title/Abstract]) AND ({date_query})", "retmode": "json", "retmax": 5}
+    search_url = f"{base_url}esearch.fcgi"; search_params = {"db": "pubmed", "term": f"({english_term}[MeSH Terms] OR {english_term}[Title/Abstract]) AND ({date_query})", "retmode": "json", "retmax": 5}
     try:
-        response = requests.get(search_url, params=search_params)
-        response.raise_for_status()
-        data = response.json()
+        response = requests.get(search_url, params=search_params); response.raise_for_status(); data = response.json()
         id_list = data.get("esearchresult", {}).get("idlist", [])        
         if not id_list: return []
         fetch_url = f"{base_url}efetch.fcgi"; fetch_params = {"db": "pubmed", "id": ",".join(id_list), "retmode": "xml"}        
@@ -88,15 +81,10 @@ def search_pubmed(english_term, days=30):
             if not abstract_text: continue
             pub_date_node = article.find(".//PubDate")
             if pub_date_node is not None:
-                year = pub_date_node.findtext("Year", "不明"); month_str = pub_date_node.findtext("Month", "不明")
-                month = month_map.get(month_str, month_str) 
+                year = pub_date_node.findtext("Year", "不明"); month_str = pub_date_node.findtext("Month", "不明"); month = month_map.get(month_str, month_str) 
                 pub_date_jp_str = to_wareki_jp(year, month)
             else: pub_date_jp_str = "発表日不明"
-            articles.append({
-                "title": article.findtext(".//ArticleTitle") or "N/A",
-                "authors": ", ".join([f"{a.findtext('LastName')} {a.findtext('Initials')}" for a in article.findall('.//Author') if a.findtext('LastName')]) or "N/A",
-                "abstract": abstract_text, "url": f"https://pubmed.ncbi.nlm.nih.gov/{article.findtext('.//PMID')}/", "pub_date_jp": pub_date_jp_str
-            })
+            articles.append({"title": article.findtext(".//ArticleTitle") or "N/A", "authors": ", ".join([f"{a.findtext('LastName')} {a.findtext('Initials')}" for a in article.findall('.//Author') if a.findtext('LastName')]) or "N/A", "abstract": abstract_text, "url": f"https://pubmed.ncbi.nlm.nih.gov/{article.findtext('.//PMID')}/", "pub_date_jp": pub_date_jp_str})
         return articles
     except requests.RequestException as e: st.warning(f"PubMed APIでエラー: {e}"); return []
 
@@ -104,8 +92,7 @@ def create_google_doc(title, content, creds):
     try:
         docs_service = build('docs', 'v1', credentials=creds)        
         doc = {'title': title}; document = docs_service.documents().create(body=doc).execute()
-        doc_id = document.get('documentId')
-        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+        doc_id = document.get('documentId'); doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
         requests_body = [{'insertText': {'location': {'index': 1}, 'text': content}}]
         docs_service.documents().batchUpdate(documentId=doc_id, body={'requests': requests_body}).execute()
         return doc_url
@@ -121,11 +108,21 @@ with st.form("search_form"):
     submitted = st.form_submit_button("レポート作成を開始")
 
 if submitted and jp_disease_input:
+    # ★★★ ここが今回の修正の心臓部です！ ★★★
+    # ボタンが押されたら、まず最初にGeminiの準備（包丁を取り出す作業）を行う
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    except Exception as e:
+        st.error(f"Geminiの準備中にエラーが発生しました: {e}")
+        st.stop()
+        
     # Google認証情報の準備
-    creds = Credentials.from_authorized_user_info(GOOGLE_TOKEN_INFO, SCOPES)
-    if not creds.valid and creds.refresh_token:
-        try: creds.refresh(Request())
-        except Exception as e: st.error(f"Google認証の更新に失敗しました: {e}"); st.stop()
+    try:
+        creds = ServiceAccountCredentials.from_service_account_info(GOOGLE_CREDS_INFO, scopes=SCOPES)
+    except Exception as e:
+        st.error(f"Google認証情報の読み込みに失敗しました。Secretsの'credentials'の内容を確認してください。エラー: {e}")
+        st.stop()
 
     jp_disease_list = [name.strip() for name in jp_disease_input.split(',') if name.strip()]
     today_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -135,7 +132,7 @@ if submitted and jp_disease_input:
     for jp_disease in jp_disease_list:
         with st.status(f"【{jp_disease}】のレポートを作成中…", expanded=True) as status:
             st.write("1. 英語キーワードに変換中...")
-            english_term = translate_jp_to_en_for_search(jp_disease, model)
+            english_term = translate_jp_to_en_for_search(jp_disease, model) # これで model が使える
             if not english_term: st.warning(f"変換失敗。スキップします。"); status.update(label="キーワード変換に失敗しました", state="error"); continue
             st.write(f"-> `{english_term}`")
             
@@ -154,7 +151,11 @@ if submitted and jp_disease_input:
             st.write("4. Googleドキュメントを作成中...")
             doc_title = f"{jp_disease} 最新論文解説レポート ({today_str})"
             doc_url = create_google_doc(doc_title, final_content, creds)
-            if doc_url: status.update(label="レポート作成完了！", state="complete")
-            else: status.update(label="ドキュメント作成に失敗", state="error")
+            if doc_url:
+                st.success(f"「{jp_disease}」のレポートが完成しました！")
+                st.markdown(f"**[完成したレポートを開く]({doc_url})**", unsafe_allow_html=True)
+                status.update(label="レポート作成完了！", state="complete")
+            else:
+                status.update(label="ドキュメント作成に失敗", state="error")
 
     st.success("すべての処理が完了しました！")
