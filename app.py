@@ -3,7 +3,7 @@ import requests
 import datetime
 import os
 import google.generativeai as genai
-import google.auth  # ★【最後の忘れ物】Googleのメインの道具箱をインポート
+import google.auth  # Googleのメインの道具箱をインポート
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
