@@ -1,11 +1,9 @@
 import streamlit as st
 import requests
 import datetime
-import os.path
+import os
 import google.generativeai as genai
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google.oauth2.service_account import Credentials as ServiceAccountCredentials
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import json
@@ -13,16 +11,24 @@ import json
 # --- Streamlitのシークレット機能から情報を読み込む ---
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    GOOGLE_CREDS_JSON_STR = st.secrets["gcp_service_account"]["credentials"]
-    # 文字列から認証情報オブジェクトを作成
-    GOOGLE_CREDS_INFO = json.loads(GOOGLE_CREDS_JSON_STR)
-    SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/documents']
-except (KeyError, FileNotFoundError, json.JSONDecodeError) as e:
-    st.error(f"必要な認証情報が正しく設定されていません。StreamlitのSecretsを確認してください。エラー: {e}")
+except KeyError:
+    st.error("Gemini APIキーが設定されていません。StreamlitのSecretsを確認してください。")
     st.stop()
 
+# --- Google認証情報の準備 (Workload Identity連携) ---
+def get_google_credentials():
+    # Streamlit Cloud上でGitHub Actions経由で実行される場合、
+    # google-github-actions/auth@v2 が設定する環境変数から自動で認証情報が読み込まれる。
+    # この関数は、その認証情報にGoogle Drive APIの操作範囲(scope)を付与する役割を持つ。
+    try:
+        # このライブラリは、標準的な環境変数を探して自動で認証を試みる
+        creds, project_id = google.auth.default(scopes=['https://www.googleapis.com/auth/drive'])
+        return creds
+    except Exception as e:
+        st.error(f"Google Cloudの認証に失敗しました。管理者にお問い合わせください。エラー: {e}")
+        return None
 
-# --- ここから下の関数群（変更なし） ---
+# --- ここから下の関数群は、一切の変更なし ---
 def to_wareki_jp(y, m):
     try: y, m = int(y), int(m)
     except (ValueError, TypeError): return f"{y}年{m}月"
@@ -88,51 +94,52 @@ def search_pubmed(english_term, days=30):
         return articles
     except requests.RequestException as e: st.warning(f"PubMed APIでエラー: {e}"); return []
 
-def create_google_doc(title, content, creds):
+def create_google_doc(title, content, creds, folder_id):
     try:
-        docs_service = build('docs', 'v1', credentials=creds)        
-        doc = {'title': title}; document = docs_service.documents().create(body=doc).execute()
-        doc_id = document.get('documentId'); doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+        # Google Docs APIとDrive APIの両方を使う
+        drive_service = build('drive', 'v3', credentials=creds)
+        docs_service = build('docs', 'v1', credentials=creds)
+        
+        # まずDriveに空のドキュメントを作成
+        file_metadata = {'name': title, 'mimeType': 'application/vnd.google-apps.document', 'parents': [folder_id]}
+        document = drive_service.files().create(body=file_metadata).execute()
+        doc_id = document.get('id')
+        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+        
+        # 次にDocs APIで内容を書き込む
         requests_body = [{'insertText': {'location': {'index': 1}, 'text': content}}]
         docs_service.documents().batchUpdate(documentId=doc_id, body={'requests': requests_body}).execute()
         return doc_url
-    except HttpError as err: st.error(f"Googleドキュメント作成中にエラー: {err}"); return None
+    except HttpError as err: st.error(f"Google Drive/Docs APIでエラー: {err}"); return None
 
 # --- Streamlitアプリのメインロジック ---
 st.set_page_config(page_title="最新医学論文おまかせサマリー", layout="centered")
 st.title("👨‍⚕️ 最新医学論文おまかせサマリー")
 st.markdown("知りたい病名やキーワードを日本語で入力すると、AIが海外の最新論文を検索・分析し、要点解説レポートを自動でGoogleドキュメントに作成します。")
 
+# ★レポートを保存するGoogle DriveフォルダのIDを入力させる
+DRIVE_FOLDER_ID = st.text_input("レポートを保存するGoogle DriveフォルダのIDを入力してください", help="Googleドライブで、このアプリ専用に作成・共有設定したフォルダを開き、URLの最後の部分にある英数字の羅列を貼り付けてください。")
+
 with st.form("search_form"):
     jp_disease_input = st.text_input("ここに病名やキーワードを入力してください（例: 糖尿病, 高血圧）", "")
     submitted = st.form_submit_button("レポート作成を開始")
 
-if submitted and jp_disease_input:
-    # ★★★ ここが今回の修正の心臓部です！ ★★★
-    # ボタンが押されたら、まず最初にGeminiの準備（包丁を取り出す作業）を行う
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-    except Exception as e:
-        st.error(f"Geminiの準備中にエラーが発生しました: {e}")
-        st.stop()
-        
-    # Google認証情報の準備
-    try:
-        creds = ServiceAccountCredentials.from_service_account_info(GOOGLE_CREDS_INFO, scopes=SCOPES)
-    except Exception as e:
-        st.error(f"Google認証情報の読み込みに失敗しました。Secretsの'credentials'の内容を確認してください。エラー: {e}")
+if submitted and jp_disease_input and DRIVE_FOLDER_ID:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    creds = get_google_credentials()
+    if not creds:
         st.stop()
 
     jp_disease_list = [name.strip() for name in jp_disease_input.split(',') if name.strip()]
     today_str = datetime.date.today().strftime("%Y-%m-%d")
-
     st.info("処理を開始しました。完了まで数分かかることがあります…")
 
     for jp_disease in jp_disease_list:
         with st.status(f"【{jp_disease}】のレポートを作成中…", expanded=True) as status:
             st.write("1. 英語キーワードに変換中...")
-            english_term = translate_jp_to_en_for_search(jp_disease, model) # これで model が使える
+            english_term = translate_jp_to_en_for_search(jp_disease, model)
             if not english_term: st.warning(f"変換失敗。スキップします。"); status.update(label="キーワード変換に失敗しました", state="error"); continue
             st.write(f"-> `{english_term}`")
             
@@ -150,7 +157,7 @@ if submitted and jp_disease_input:
             
             st.write("4. Googleドキュメントを作成中...")
             doc_title = f"{jp_disease} 最新論文解説レポート ({today_str})"
-            doc_url = create_google_doc(doc_title, final_content, creds)
+            doc_url = create_google_doc(doc_title, final_content, creds, DRIVE_FOLDER_ID)
             if doc_url:
                 st.success(f"「{jp_disease}」のレポートが完成しました！")
                 st.markdown(f"**[完成したレポートを開く]({doc_url})**", unsafe_allow_html=True)
