@@ -130,13 +130,13 @@ st.set_page_config(page_title="最新医学論文おまかせサマリー", layo
 st.title("👨‍⚕️ 最新医学論文おまかせサマリー")
 st.markdown("知りたい病名やキーワードを日本語で入力すると、AIが海外の最新論文を検索・分析し、要点解説レポートを自動でGoogleドキュメントに作成します。")
 
-DRIVE_FOLDER_ID = st.text_input("レポートを保存するGoogle DriveフォルダのIDを入力してください", help="Googleドライブで、このアプリ専用に作成・共有設定したフォルダを開き、URLの最後の部分にある英数字の羅列を貼り付けてください。")
+DRIVE_FOLDER_ID = st.secrets["DRIVE_FOLDER_ID"]
 
 with st.form("search_form"):
     jp_disease_input = st.text_input("ここに病名やキーワードを入力してください（例: 糖尿病, 高血圧）", "")
     submitted = st.form_submit_button("レポート作成を開始")
 
-if submitted and jp_disease_input and DRIVE_FOLDER_ID:
+if submitted and jp_disease_input:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
