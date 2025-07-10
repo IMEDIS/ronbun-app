@@ -3,8 +3,7 @@ import requests
 import datetime
 import os
 import google.generativeai as genai
-import google.auth  # Googleのメインの道具箱をインポート
-from google.oauth2 import service_account
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import json
@@ -12,26 +11,24 @@ import json
 # --- Streamlitのシークレット機能から情報を読み込む ---
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-except KeyError:
-    st.error("Gemini APIキーが設定されていません。StreamlitのSecretsを確認してください。")
+    # ★ サービスアカウントのJSON情報をまるごと読み込む
+    GOOGLE_CREDS_INFO = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+except Exception as e:
+    st.error(f"必要な認証情報が正しく設定されていません。StreamlitのSecretsを確認してください。エラー: {e}")
     st.stop()
 
-# --- Google認証情報の準備 (Workload Identity連携) ---
+# --- Google認証情報の準備 (サービスアカウント方式) ---
 def get_google_credentials():
-    """
-    Workload Identity連携で自動的に設定された認証情報を読み込み、
-    正しい操作範囲(scope)を付与して返す、完璧な認証関数。
-    """
+    """Secretsから読み込んだ情報を使って、完璧な認証情報オブジェクトを作成する"""
     try:
         scopes = ['https://www.googleapis.com/auth/drive']
-        # この関数が、GitHub Actionsによって設定された環境変数を探し、自動で認証してくれる
-        credentials, project_id = google.auth.default(scopes=scopes)
-        return credentials
+        creds = Credentials.from_service_account_info(GOOGLE_CREDS_INFO, scopes=scopes)
+        return creds
     except Exception as e:
         st.error(f"Google Cloudの認証に失敗しました。管理者にお問い合わせください。エラー: {e}")
         return None
 
-# --- ここから下の関数群は、一切の変更なし ---
+# --- ここから下の関数群は、一切の変更なし (省略) ---
 def to_wareki_jp(y, m):
     try: y, m = int(y), int(m)
     except (ValueError, TypeError): return f"{y}年{m}月"
