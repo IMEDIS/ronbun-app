@@ -3,7 +3,8 @@ import requests
 import datetime
 import os
 import google.generativeai as genai
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import json
@@ -11,24 +12,43 @@ import json
 # --- Streamlitのシークレット機能から情報を読み込む ---
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    GOOGLE_CREDS_INFO = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-    DRIVE_FOLDER_ID = st.secrets["DRIVE_FOLDER_ID"]
+    # ★【修正済】正しい名前の引き出しから、正しい鍵を取り出す
+    CREDS_JSON_STR = st.secrets["gcp_oauth_credentials"]["credentials"]
+    TOKEN_JSON_STR = st.secrets["gcp_oauth_credentials"]["token"]
 except Exception as e:
-    st.error(f"必要な認証情報が正しく設定されていません。StreamlitのSecretsを確認してください。エラー: {e}")
+    st.error(f"必要な認証情報が正しく設定されていません。StreamlitのSecretsを再確認してください。エラー: {e}")
     st.stop()
 
-# --- Google認証情報の準備 (サービスアカウント方式) ---
+# --- Google認証情報の準備 (ユーザー認証方式) ---
 def get_google_credentials():
-    """Secretsから読み込んだ情報を使って、完璧な認証情報オブジェクトを作成する"""
+    """SecretsからユーザーのOAuth認証情報を読み込み、リフレッシュ可能な認証情報オブジェクトを作成する"""
     try:
-        scopes = ['https://www.googleapis.com/auth/drive']
-        creds = Credentials.from_service_account_info(GOOGLE_CREDS_INFO, scopes=scopes)
+        creds_info = json.loads(CREDS_JSON_STR)['installed']
+        token_info = json.loads(TOKEN_JSON_STR)
+        
+        creds = Credentials(
+            token=token_info.get('token'),
+            refresh_token=token_info.get('refresh_token'),
+            token_uri=creds_info.get('token_uri'),
+            client_id=creds_info.get('client_id'),
+            client_secret=creds_info.get('client_secret'),
+            scopes=token_info.get('scopes')
+        )
+        
+        # トークンが期限切れの場合、または有効でない場合にリフレッシュを試みる
+        if not creds.valid:
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                # このエラーは、リフレッシュトークン自体が古い場合に発生する可能性がある
+                st.error("Google認証情報の有効期限が切れており、更新もできませんでした。管理者による再認証が必要です。")
+                return None
         return creds
     except Exception as e:
-        st.error(f"Google Cloudの認証に失敗しました。管理者にお問い合わせください。エラー: {e}")
+        st.error(f"Google認証情報の読み込みに失敗しました。Secretsの内容が正しいか確認してください。エラー: {e}")
         return None
 
-# --- ここから下の関数群は、一切の変更なし ---
+# --- ここから下の関数群は、一切の変更なし (省略) ---
 def to_wareki_jp(y, m):
     try: y, m = int(y), int(m)
     except (ValueError, TypeError): return f"{y}年{m}月"
@@ -115,6 +135,8 @@ st.subheader("世界中の最新論文から、知りたい情報を、3分で�
 st.write("キーワードを日本語で入力するだけで、AIが海外の最新論文を自動で検索・分析し、要点をまとめたサマリーレポートを、あなたのGoogleドライブに作成します。")
 st.write("") 
 
+DRIVE_FOLDER_ID = st.text_input("レポートを保存するGoogle DriveフォルダのIDを入力してください", help="Googleドライブで、このアプリ専用に作成・共有設定したフォルダを開き、URLの最後の部分にある英数字の羅列を貼り付けてください。")
+
 with st.form("search_form"):
     st.markdown("##### 検索したいキーワードを入力してください")
     col1, col2 = st.columns([3, 1])
@@ -123,7 +145,7 @@ with st.form("search_form"):
     with col2:
         submitted = st.form_submit_button("レポート作成を開始", use_container_width=True)
 
-if submitted and jp_disease_input:
+if submitted and jp_disease_input and DRIVE_FOLDER_ID:
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
