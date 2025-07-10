@@ -3,7 +3,8 @@ import requests
 import datetime
 import os
 import google.generativeai as genai
-from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import json
@@ -11,21 +12,38 @@ import json
 # --- Streamlitのシークレット機能から情報を読み込む ---
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    # ★ サービスアカウントのJSON情報をまるごと読み込む
-    GOOGLE_CREDS_INFO = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    CREDS_JSON_STR = st.secrets["gcp_oauth_credentials"]["credentials"]
+    TOKEN_JSON_STR = st.secrets["gcp_oauth_credentials"]["token"]
 except Exception as e:
     st.error(f"必要な認証情報が正しく設定されていません。StreamlitのSecretsを確認してください。エラー: {e}")
     st.stop()
 
-# --- Google認証情報の準備 (サービスアカウント方式) ---
+# --- Google認証情報の準備 (ユーザー認証方式) ---
 def get_google_credentials():
-    """Secretsから読み込んだ情報を使って、完璧な認証情報オブジェクトを作成する"""
+    """SecretsからユーザーのOAuth認証情報を読み込み、リフレッシュ可能な認証情報オブジェクトを作成する"""
     try:
-        scopes = ['https://www.googleapis.com/auth/drive']
-        creds = Credentials.from_service_account_info(GOOGLE_CREDS_INFO, scopes=scopes)
+        creds_info = json.loads(CREDS_JSON_STR)['installed']
+        token_info = json.loads(TOKEN_JSON_STR)
+        
+        creds = Credentials(
+            token=token_info.get('token'),
+            refresh_token=token_info.get('refresh_token'),
+            token_uri=creds_info.get('token_uri'),
+            client_id=creds_info.get('client_id'),
+            client_secret=creds_info.get('client_secret'),
+            scopes=token_info.get('scopes')
+        )
+        
+        # トークンが期限切れの場合、または有効でない場合にリフレッシュを試みる
+        if not creds.valid:
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                st.error("Google認証情報の有効期限が切れているか、無効です。")
+                return None
         return creds
     except Exception as e:
-        st.error(f"Google Cloudの認証に失敗しました。管理者にお問い合わせください。エラー: {e}")
+        st.error(f"Google認証情報の読み込みに失敗しました。Secretsの内容が正しいか確認してください。エラー: {e}")
         return None
 
 # --- ここから下の関数群は、一切の変更なし (省略) ---
