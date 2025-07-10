@@ -1,0 +1,35 @@
+name: Deploy to Streamlit Cloud
+
+# このワークフローが実行されるタイミングを指定（mainブランチにコードがプッシュされた時）
+on:
+  push:
+    branches:
+      - main
+
+# 実行されるジョブを定義
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # Google Cloudへの認証に必要な権限を、このジョブに与える
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      # ステップ1: GitHubリポジトリのコードをチェックアウトする
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ステップ2: Google Cloudへの認証を行う（Workload Identity連携）
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          workload_identity_provider: 'projects/742531713632/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'ronbun-app-robot@ronbun-465502.iam.gserviceaccount.com'
+
+      # ステップ3: Streamlitアプリをデプロイするための（ダミーの）ステップ
+      # ※実際にはStreamlit Cloudが自動で検知するが、認証を通すために必要
+      - name: 'Deployment step'
+        run: echo "Authentication successful. Streamlit Cloud will now take over."
